@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "description": "Realizar un ejemplo de aplicacion web basada en el TechStack de NodeJS, Express que permita controlar las sesiones y que registre los datos en la variable",
   "main": "index.js",
-  "type":"module",
+  "type": "module",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev":"node app.js"
+    "dev": "node app.js"
   },
   "keywords": [
     "Express",
@@ -19,6 +19,7 @@
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "express-session": "^1.18.1",
+    "macaddress": "^0.5.3",
     "moment-timezone": "^0.5.46",
     "nodemon": "^3.1.9",
     "uuid": "^11.0.5"
