@@ -1,4 +1,3 @@
-// Exportación de librerías   
 import express from 'express';  
 import session from 'express-session';  
 import bodyParser from 'body-parser';  
@@ -15,13 +14,16 @@ app.listen(PORT, () => {
 app.use(bodyParser.json());  
 app.use(bodyParser.urlencoded({ extended: true }));  
 
-// Sesiones almacenadas en memoria RAM   
-const sessions = {};  
+// Sesiones almacenadas con express-session   
 app.use(session({  
     secret: "P4-ADLN#mcqueen-sesionesHTTP-VariablesDeSesion",  
     resave: false,  
     saveUninitialized: true,  
-    cookie: { maxAge: 5 * 60 * 1000 }  
+    cookie: { 
+        maxAge: 5 * 60 * 1000,  // 5 minutos
+        httpOnly: true,  // Seguridad adicional
+        secure: false // Cambiar a 'true' si usas HTTPS
+    }  
 }));  
 
 app.get('/', (req, res) => {  
@@ -46,66 +48,89 @@ const getLocalIp = () => {
     return null; // Retornamos null si no se encuentra una interfaz de red válida   
 };  
 
+// Ruta de login que crea una nueva sesión
 app.post('/login', (req, res) => {  
     const { email, nickname, macAddress } = req.body;  
+
     if (!email || !nickname || !macAddress) {  
         return res.status(400).json({  
             message: "Se esperan campos requeridos"  
         });  
     }  
-    const sessionId = uuidv4();  
-    const now = new Date();  
-
-    sessions[sessionId] = {  
-        sessionId,  
-        email,  
-        nickname,  
-        macAddress,  
-        ip: getLocalIp(),  
-        createdAt: now,  
-        lastAccessedAt: now  
-    };  
+// Crear una nueva sesión
+    req.session.email = email;
+    req.session.nickname = nickname;
+    req.session.macAddress = macAddress;
+    req.session.ip = getLocalIp();
+    req.session.createdAt = new Date();
+    req.session.lastAccessedAt = new Date();
 
     res.status(200).json({  
         message: "Inicio de sesión exitoso",  
-        sessionId  
+        sessionId: req.sessionID 
     });  
 });  
 
+// Ruta de logout que elimina la sesión activa
 app.post("/logout", (req, res) => {  
-    const { sessionId } = req.body;  
-    if (!sessionId || !sessions[sessionId]) {  
+    const { sessionId } = req.body;  // Verificar si se proporcionó un ID de sesión
+
+    if (!req.session || !req.sessionID) {  
         return res.status(404).json({  
             message: "No se ha encontrado una sesión activa."  
         });  
     }  
-    delete sessions[sessionId];  
-    res.status(200).json({  
-        message: "Logout echo"  
-    });  
+
+    // Borrar la sesión
+    req.session.destroy((err) => {
+        if (err) {
+            return res.status(500).json({
+                message: "Error al destruir la sesión",
+                error: err
+            });
+        }
+        res.status(200).json({  
+            message: "Logout exitoso"  
+        });
+    });
 });  
 
 app.post("/update", (req, res) => {  
-    // Implementar lógica de actualización aquí  
-    const{sessionId}=req.body;
+    const { email, nickname } = req.body;
 
-    if(!sessionId || !sessions[sessionId]){
-        return res.status(404).json({message:"No hay sesiones activas"});
+    if (!req.session || !req.sessionID) {
+        return res.status(404).json({ message: "No existe una sesión activa." });
     }
-    sessions[sessionId].lastAccess =new Date();
-    res.send({message:'Usr updated succesfully.', session:req.session})
+
+    if (email) req.session.email = email;// Actualizar el nickname
+    if (nickname) req.session.nickname = nickname;// Actualizar la fecha de último acceso
+    req.session.lastAccessedAt = new Date();
+
+    res.status(200).json({
+        message: "Sesión actualizada correctamente.",
+        session: req.session,
+    });
 });  
 
-app.get("/status", (req, res) => {  
-    const sessionId = req.query.sessionId;  
-    if (!sessionId || !sessions[sessionId]) {  
-        return res.status(404).json({  
-            message: "No hay una sesión activa"  
-        });  
-    }  
 
-    res.status(200).json({  
-        message: "Sesión actualizada correctamente",  
-        session: sessions[sessionId]  
-    });  
+app.get("/status", (req, res) => {
+    if (!req.session || !req.sessionID) {
+        return res.status(404).json({
+            message: "No hay una sesión activa"
+        });
+    }
+
+    const now = new Date();
+    const idleTime = (now - new Date(req.session.lastAccessedAt)) / 1000; // Tiempo de inactividad
+    const duration = (now - new Date(req.session.createdAt)) / 1000; // Duración total
+
+    res.status(200).json({
+        message: "Sesión activa",
+        session: req.session,
+        idleTime: `${idleTime} segundos`,
+        duration: `${duration} segundos`
+    });
 });
+
+
+
