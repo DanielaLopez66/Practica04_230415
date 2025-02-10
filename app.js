@@ -5,193 +5,245 @@ import { v4 as uuidv4 } from 'uuid';
 import os from 'os';
 import macaddress from 'macaddress';
 import moment from 'moment-timezone';
+import mongoose from 'mongoose';
+import forge from 'node-forge';
+import Session from './models/models.js';
 
 const app = express();
 const PORT = 3500;
 
+// Conexión a MongoDB
+mongoose.connect('mongodb+srv://DanielaLopez:danielalopez66@danielalopez.6gcvi.mongodb.net/sessionApi?retryWrites=true&w=majority&appName=DanielaLopez')
+.then((db)=> console.log("MongoDB Atlas Connected"))
+.catch((error)=> console.error(error));
+
+// Generación de claves RSA
+const keypair = forge.pki.rsa.generateKeyPair(600);
+const publicKey = forge.pki.publicKeyToPem(keypair.publicKey);
+const privateKey = forge.pki.privateKeyToPem(keypair.privateKey);
+
 app.listen(PORT, () => {
-    console.log(`Server iniciado en http://localhost:${PORT}`);
+  console.log(`Server iniciado en http://localhost:${PORT}`);
 });
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-const sessions = {};
-
 app.use(
-    session({
-        secret: "P4-ADLN#pandeChoclo-SessionesHTTP-VariablesdeSesion",
-        resave: false,
-        saveUninitialized: true,
-        cookie: { maxAge: 5 * 60 * 1000 }
-    })
+  session({
+    secret: "P6-ADLN-Mcqueen-SesionesHTTP-VariablesDeSesion",
+    resave: false,
+    saveUninitialized: true,
+    cookie: { maxAge: 10 * 60 * 1000 } 
+  })
 );
 
 app.get('/', (req, res) => {
-    return res.status(200).json({
-        message: 'Bienvendi@ a la API de Control de Sesiones',
-        author: 'Ana Daniela Lopez Neri'
-    });
+  return res.status(200).json({
+    message: 'Bienvendi@ a la API de Control de Sesiones',
+    author: 'Ana Daniela Lopez Neri'
+  });
 });
 
 const getLocalIp = () => {
-    const networkInterfaces = os.networkInterfaces();
-    for (const interfaceName in networkInterfaces) {
-        const interfaces = networkInterfaces[interfaceName];
-        for (const iface of interfaces) {
-            if (iface.family === "IPv4" && !iface.internal) {
-                return iface.address;
-            }
-        }
+  const networkInterfaces = os.networkInterfaces();
+  for (const interfaceName in networkInterfaces) {
+    const interfaces = networkInterfaces[interfaceName];
+    for (const iface of interfaces) {
+      if (iface.family === "IPv4" && !iface.internal) {
+        return iface.address;
+      }
     }
-    return null;
+  }
+  return null;
 };
 
 const getServerMac = () => {
-    return new Promise((resolve, reject) => {
-        macaddress.one((err, mac) => {
-            if (err) {
-                reject(err);
-            }
-            resolve(mac);
-        });
+  return new Promise((resolve, reject) => {
+    macaddress.one((err, mac) => {
+      if (err) {
+        reject(err);
+      }
+      resolve(mac);
     });
+  });
+};
+
+const encryptData = (data) => {
+  const encrypted = keypair.publicKey.encrypt(data, 'RSA-OAEP');
+  return forge.util.encode64(encrypted);
 };
 
 app.post('/login', async (req, res) => {
-    const { email, nickname, macAddress } = req.body;
-    if (!email || !nickname || !macAddress) {
-        return res.status(400).json({
-            message: 'Se esperan campos requeridos'
-        });
-    }
-
-    const sessionID = uuidv4();
-    const createdAt_CDMX = moment().tz('America/Mexico_City').format('YYYY/MM/DD HH:mm:ss');
-
-    req.session.email = email;
-    req.session.sessionID = sessionID;
-    req.session.nickname = nickname;
-    req.session.macAddress = macAddress;
-    req.session.createdAt = createdAt_CDMX;
-    req.session.lastAccessed = createdAt_CDMX;
-    req.session.serverIp = getLocalIp();
-    req.session.serverMac = await getServerMac();
-
-    sessions[sessionID] = req.session;
-
-    res.status(200).json({
-        message: 'Se ha logueado de manera exitosa',
-        sessionID
+  const { email, nickname, macAddress } = req.body;
+  if (!email || !nickname || !macAddress) {
+    return res.status(400).json({
+      message: 'Se esperan campos requeridos'
     });
+  }
+
+  const sessionID = uuidv4();
+  const createdAt_CDMX = moment().tz('America/Mexico_City').toISOString();
+  const serverIp = encryptData(getLocalIp() || '');
+  const serverMac = encryptData(await getServerMac());
+  const encryptedMacAddress = encryptData(macAddress);
+
+  const sessionData = new Session({
+    sessionID,
+    email,
+    nickname,
+    macAddress: encryptedMacAddress,
+    createdAt: createdAt_CDMX,
+    lastAccessed: createdAt_CDMX,
+    serverIp,
+    serverMac,
+    status: "Activa"
+  });
+
+  await sessionData.save();
+  req.session.sessionID = sessionID;
+
+  res.status(200).json({
+    message: 'Se ha logueado de manera exitosa',
+    sessionID
+  });
 });
 
-app.post('/logout', (req, res) => {
-    if (!req.session.sessionID || !sessions[req.session.sessionID]) {
-        return res.status(404).json({
-            message: 'No existe una sesión activa'
-        });
-    }
+app.post('/logout', async (req, res) => {
+  const { sessionID } = req.session;
 
-    delete sessions[req.session.sessionID];
-    req.session.destroy((err) => {
-        if (err) {
-            return res.status(500).json({
-                message: 'Error al cerrar sesión'
-            });
-        }
+  if (!sessionID) {
+    return res.status(404).json({
+      message: 'No existe una sesión activa'
     });
+  }
 
-    res.status(200).json({
-        message: 'Logout exitoso'
-    });
+  await Session.updateOne({ sessionID }, { status: "Finalizada por el Usuario" });
+  req.session.destroy();
+
+  res.status(200).json({
+    message: 'Logout exitoso'
+  });
 });
 
-app.post('/update', (req, res) => {
-    const { email, nickname } = req.body;
+app.post('/update', async (req, res) => {
+  const { email, nickname } = req.body;
 
-    if (!req.session.sessionID || !sessions[req.session.sessionID]) {
-        return res.status(404).json({
-            message: 'No existe una sesión activa'
-        });
-    }
-
-    if (email) req.session.email = email;
-    if (nickname) req.session.nickname = nickname;
-    req.session.lastAccessed = moment().tz('America/Mexico_City').format('YYYY/MM/DD HH:mm:ss');
-
-    sessions[req.session.sessionID] = req.session;
-
-    res.status(200).json({
-        message: 'Datos actualizados',
-        session: req.session
+  if (!req.session.sessionID) {
+    return res.status(404).json({
+      message: 'No existe una sesión activa'
     });
+  }
+
+  const session = await Session.findOne({ sessionID: req.session.sessionID });
+  if (!session) {
+    return res.status(404).json({ message: 'Sesión no encontrada' });
+  }
+
+  if (email) session.email = email;
+  if (nickname) session.nickname = nickname;
+  session.lastAccessed = moment().tz('America/Mexico_City').toISOString();
+
+  await session.save();
+
+  res.status(200).json({
+    message: 'Datos actualizados',
+    session
+  });
 });
 
-app.get('/status', (req, res) => {
-    if (!req.session.sessionID || !sessions[req.session.sessionID]) {
-        return res.status(404).json({
-            message: 'No existe una sesión activa'
-        });
-    }
+app.get('/status', async (req, res) => {
+  const { sessionID } = req.session;
 
-    const session = sessions[req.session.sessionID];
-    const now = moment();
-    const idleTime = now.diff(moment(session.lastAccessed, 'YYYY/MM/DD HH:mm:ss'), 'seconds');
-    const duration = now.diff(moment(session.createdAt, 'YYYY/MM/DD HH:mm:ss'), 'seconds');
-
-    res.status(200).json({
-        message: 'Sesión activa',
-        session,
-        idleTime: `${idleTime} segundos`,
-        duration: `${duration} segundos`
+  if (!sessionID) {
+    return res.status(404).json({
+      message: 'No existe una sesión activa'
     });
+  }
+
+  const session = await Session.findOne({ sessionID });
+  if (!session) {
+    return res.status(404).json({ message: 'Sesión no encontrada' });
+  }
+
+  const now = moment();
+  const inactividad = now.diff(moment(session.lastAccessed), 'minutes');
+  const duracion = now.diff(moment(session.createdAt), 'minutes');
+
+  res.status(200).json({
+    message: 'Sesión activa',
+    session,
+    inactividad: '${inactividad} minutos',
+    duracion: '${duracion} minutos'
+  });
 });
 
-app.get('/active-sessions', (req, res) => {
-    if (Object.keys(sessions).length === 0) {
-        return res.status(404).json({
-            message: 'No hay sesiones activas'
-        });
-    }
+app.get('/active-sessions', async (req, res) => {
+  const sessions = await Session.find();
 
-    const formattedSessions = {};
-    for (const sessionID in sessions) {
-        const session = sessions[sessionID];
-        formattedSessions[sessionID] = {
-            ...session,
-            createdAt: moment(session.createdAt, 'YYYY/MM/DD HH:mm:ss')
-                .tz('America/Mexico_City')
-                .format('YYYY/MM/DD HH:mm:ss'),
-            lastAccessed: moment(session.lastAccessed, 'YYYY/MM/DD HH:mm:ss')
-                .tz('America/Mexico_City')
-                .format('YYYY/MM/DD HH:mm:ss')
-        };
-    }
-
-    res.status(200).json({
-        message: 'Sesiones activas',
-        sessions: formattedSessions
+  if (sessions.length === 0) {
+    return res.status(404).json({
+      message: 'No hay sesiones'
     });
+  }
+
+  const now = moment();
+  const formattedSessions = sessions.map(session => {
+    const inactividad = now.diff(moment(session.lastAccessed), 'minutes');
+    return {
+      ...session._doc,
+      createdAt: moment(session.createdAt).tz('America/Mexico_City').toISOString(),
+      lastAccessed: moment(session.lastAccessed).tz('America/Mexico_City').toISOString(),
+      inactividad: '${inactividad} minutos'
+    };
+  });
+
+  res.status(200).json({
+    message: 'Sesiones activas',
+    sessions: 'formattedSessions'
+  });
+});
+app.get('/current', async (req, res) => {// sesiones actuales
+  try {
+    const activeSessions = await Session.find({ status: "Activa" });
+
+    if (activeSessions.length === 0) {
+      return res.status(404).json({ message: 'No hay sesiones activas' });
+    }
+
+    const formattedSessions = activeSessions.map(session => ({
+      ...session._doc,
+      createdAt: moment(session.createdAt).tz('America/Mexico_City').toISOString(),
+      lastAccessed: moment(session.lastAccessed).tz('America/Mexico_City').toISOString(),
+    }));
+
+    res.status(200).json({ message: 'Sesiones activas', sessions: formattedSessions });
+  } catch (error) {
+    res.status(500).json({ message: 'Error al obtener sesiones activas', error });
+  }
 });
 
-// Limpieza automática de sesiones inactivas
-setInterval(() => {
-    const now = moment();
-    for (const sessionID in sessions) {
-        const session = sessions[sessionID];
-        const lastAccessed = moment(session.lastAccessed, 'YYYY/MM/DD HH:mm:ss');
+app.delete('/delete', async (req, res) => {
+  try {
+    await Session.deleteMany({});
+    res.status(200).json({ message: 'Todas las sesiones han sido eliminadas.' });
+  } catch (error) {
+    res.status(500).json({ message: 'Error al eliminar las sesiones', error });
+  }
+});
 
-        // Verifica que la fecha sea válida antes de calcular el tiempo de inactividad
-        if (!lastAccessed.isValid()) {
-            console.error(`Fecha inválida para la sesión: ${sessionID}`);
-            continue;
-        }
-
-        const idleTime = now.diff(lastAccessed, 'seconds'); // Tiempo inactivo en segundos
-        if (idleTime > 120) { // Elimina sesiones inactivas por más de 2 minutos
-            console.log(`Eliminando sesión inactiva: ${sessionID}`);
-            delete sessions[sessionID];
-        }
+setInterval(async () => {
+  const now = moment();
+  const sessions = await Session.find();
+  
+  for (const session of sessions) {
+    const lastAccessedMoment = moment(session.lastAccessed); // Asegúrate de que la fecha sea de tipo Moment
+    const inactividad = now.diff(lastAccessedMoment, 'minutes');
+    
+    if (inactividad > 5) { // Si la inactividad es mayor a 5 minutos
+      await Session.updateOne({ sessionID: session.sessionID }, { 
+        status: `Inactiva por ${inactividad} minutos` 
+      });
     }
-}, 60000);
+  }
+}, 60000); // Se ejecuta cada minuto
